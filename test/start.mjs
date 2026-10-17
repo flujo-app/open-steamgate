@@ -39,6 +39,7 @@ import {request as httpRequest, createServer as createHttpServer} from "node:htt
 import {bindAddresses, bindHint, describeBind, listenBound, relisten} from "../tools/osd-bind.mjs";
 import {serveSandboxConfig} from "../tools/osd-sandbox-config.mjs";
 import {mountPortableCells} from "../tools/sqlscript-to-procedure-ir.mjs";
+import {mountNativeDynpro} from "../tools/osd-native-http.mjs";
 
 // Two shapes of one listener, and the difference is whether this process
 // contains an ABAP system.
@@ -156,6 +157,8 @@ export function startServer(quiet) {
   // refuses a handler no node declares -- and `node tools/osd-routes.mjs`
   // checks the other direction.
   const hostNodes = {};
+  let nativeTransactions;
+  hostNodes['native-dynpro'] = (a, node) => { nativeTransactions = mountNativeDynpro(a, node.path); };
 
   // The port's front door is the launchpad when there is one: every app and
   // every demo this system serves is a tile on it, which is what a person
@@ -686,6 +689,7 @@ export function startServer(quiet) {
   // it meant "start stopping and carry on".
   server.close = (cb) => {
     closing = (async () => {
+      await nativeTransactions?.close();
       await closeWarm(facade.store);
       await new Promise((resolve) => (secure === undefined ? resolve() : secure.close(resolve)));
       await runtime?.stop();

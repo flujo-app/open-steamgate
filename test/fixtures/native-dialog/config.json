@@ -1,0 +1,4 @@
+{
+  "transactions": {"ZDEMO": {"bootstrap": "./bootstrap.mjs"}},
+  "maxSessions": 2
+}

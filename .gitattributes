@@ -1,0 +1,2 @@
+# The heavy-work lease runs under Bash, including from Windows checkouts.
+tools/osd-heavy.sh text eol=lf

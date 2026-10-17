@@ -107,16 +107,16 @@ export function parseWebgui(html, url) {
         return;
       }
       if (!form || !attr(node, "name")) return;
-      if (tag === "select" || !["hidden", "text", "search", "number", "checkbox", "textarea"].includes(type)) {
+      if (tag === "select" || !["hidden", "text", "search", "number", "checkbox", "radio", "textarea"].includes(type)) {
         form.unsupported = true; label("This form contains a control that requires WebGUI."); return;
       }
       const name = attr(node, "name");
-      const control = {name, value: type === "textarea" ? rawText(node) : attr(node, "value") ?? (type === "checkbox" ? "on" : ""), type,
+      const control = {name, value: type === "textarea" ? rawText(node) : attr(node, "value") ?? (["checkbox", "radio"].includes(type) ? "on" : ""), type,
         checked: has(node, "checked"), readonly: has(node, "readonly"), id: `F${++serial}`,
         max: Math.max(1, Math.min(64, Number(attr(node, "maxlength")) || 64))};
       form.controls.push(control);
       if (type !== "hidden") {
-        const caption = form.labels.get(attr(node, "id")) || (type === "checkbox" ? `${name}_${control.value}` : name);
+        const caption = form.labels.get(attr(node, "id")) || (["checkbox", "radio"].includes(type) ? `${name}_${control.value}` : name);
         if (type === "textarea") control.baseline = control.value;
         add({kind: type === "textarea" ? "editor" : "field", control, name: caption, form});
       }
@@ -159,6 +159,11 @@ export function parseWebgui(html, url) {
   }
   const documentOwners = formOwners(document);
   walk(root);
+  for (const form of page.forms) {
+    for (const control of form.controls.filter(c => c.type === 'radio')) {
+      control.radioPeers = form.controls.filter(c => c.type === 'radio' && c.name === control.name);
+    }
+  }
   // A native editor occupies the source pane. Mixed/multiple textarea forms
   // need a richer layout; never submit their unseen fields accidentally.
   const editors = page.rows.filter(r => r.kind === "editor");
@@ -236,7 +241,11 @@ export class WebguiSession {
         if (!target) continue;
         if (target.command) this.command = String(field.value).slice(0, 40);
         else if (!target.readonly) {
-          if (target.type === "checkbox") target.checked = field.value === true || field.value === "X";
+          if (target.type === 'radio') {
+            if (field.value === true || field.value === 'X') {
+              for (const peer of target.radioPeers) peer.checked = peer === target;
+            }
+          } else if (target.type === "checkbox") target.checked = field.value === true || field.value === "X";
           else {
             if (/[^\x20-\x7e]/.test(String(field.value))) throw new Error("DIAG input currently supports ASCII characters only.");
             target.value = String(field.value).slice(0, target.max);
@@ -305,7 +314,7 @@ export class WebguiSession {
     if (source && !source.verified) throw new Error("Open the native editor before submitting source, or use WebGUI.");
     const params = new URLSearchParams();
     for (const control of form.controls) {
-      if (control.type === "checkbox" && !control.checked) continue;
+      if (["checkbox", "radio"].includes(control.type) && !control.checked) continue;
       params.append(control.name, control.value);
     }
     if (action.name) params.append(action.name, action.value);
@@ -362,7 +371,7 @@ export class WebguiSession {
         if (control.readonly) { elements.push({kind: "text", row, col: 1, text: `${item.name}: ${control.value}`}); continue; }
         elements.push({kind: "text", row, col: 1, text: displayText(item.name, 30)});
         elements.push({kind: "field", row, col: 33, name: item.name, value: control.value, width: 64,
-          max: control.max, checkbox: control.type === "checkbox", checked: control.checked});
+          max: control.max, checkbox: ["checkbox", "radio"].includes(control.type), checked: control.checked});
         this.fields.set(`${row}:33`, control);
       } else if (item.kind === "button") {
         const command = `A${this.revision}_${index}`; this.actions.set(command, item.action);

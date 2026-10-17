@@ -30,6 +30,187 @@ Format adapted from `larshp/hithub` (MIT).
 
 ## Open anomalies
 
+### ANOMALY-2026-10-17-form-namespace -- Procedure and DATA names collide in emitted JavaScript
+
+- Status: `workaround` -- native compiler draft, not released.
+- Affected version: transpiler 2.14.3.
+- Input: `DATA toggle TYPE i.` and `FORM ToGgLe.` in one program, called by
+  mixed-case PERFORM statements; a function module sharing a name with group data.
+- Actual: FORM uses a plain JavaScript function name, colliding with data of
+  the same name; source casing can also disagree with its call sites. A private
+  application build emitted all selected objects but failed JavaScript syntax.
+- Local correction: native FORM and function-module declarations have distinct
+  namespaces; local calls, exports and registries use the canonical spelling.
+  Spelling changes preserve source mappings, including later columns.
+- Regression: `test/native-declarations.mjs`; behavioral execution pending.
+- Upstream: not submitted. Native generation and execution remain incomplete.
+
+### ANOMALY-2026-10-17-class-pool-globals -- Class-pool globals lose scope and module visibility
+
+- Status: `workaround` -- native compiler draft, not released.
+- Affected versions: core 2.120.73 and transpiler 2.14.3.
+- Input: DATA and nested, mixed-case CONSTANTS in a class's locals include,
+  referenced by methods of the main class.
+- Actual: private application compilation stops at "DataTranspiler, scope not
+  found". The syntax checker stores these declarations in a global scope with
+  a synthetic filename, while the emitter searches by source filename. Source
+  inspection also shows separate locals/main modules without global-variable
+  exports, and structured constant initialization retaining source casing.
+- Expected: one class-pool global lifetime and case-insensitive ABAP names,
+  with nested constant values initialized before methods use them.
+- Local correction in development: native scope fallback, structured constant
+  initialization and a shared class-pool module. Ordinary compilation remains
+  unchanged. Behavioral verification is pending.
+- Regression: `test/native-declarations.mjs`, registered for release pre-flight.
+- Upstream: not submitted; application generation has not completed.
+
+### ANOMALY-2026-10-17-function-group-scope -- Include expressions lose the function-group scope
+
+- Status: `workaround` -- native compiler draft, not released.
+- Affected versions: core 2.120.73 and transpiler 2.14.3.
+- Input: a TOP include constant initialized from a built-in constant, or a
+  MODULE following ENDFUNCTION in a function's include.
+- Actual: declaration lookup has a narrow include workaround, but initializer
+  expressions and MODULE headers still have no source-filename scope match.
+  Private application compilation reported both failures.
+- Local correction: when no procedure scope matches, native emission resolves
+  an owned function-group file to the group's shared scope. Method, FORM and
+  function scopes retain priority.
+- Regression: `test/native-declarations.mjs`; behavioral execution pending.
+- Upstream: not submitted; original transaction execution remains pending.
+
+### ANOMALY-2026-10-17-native-message -- MESSAGE loses control flow and classic exception context
+
+- Status: `workaround` -- native adapter draft; no behavioral validation yet.
+- Affected versions: transpiler/runtime 2.14.3.
+- Input: short MESSAGE using a program's MESSAGE-ID, MESSAGE RAISING, and E/W
+  during FIELD/CHAIN input validation.
+- Actual (source inspection): the emitter omits default message class and
+  RAISING; the runtime writes formatted messages to the console regardless of
+  their dialog type. The classic exception catch also swallows unmatched names
+  when its list has no OTHERS entry.
+- Expected: handled RAISING returns to its immediate caller; otherwise normal
+  message processing applies. Errors repeat the relevant validation; warnings
+  can be acknowledged. See [SAP procedure messages](https://help.sap.com/saphelp_em900/helpdata/en/4a/44c7f4c6bf0451e10000000a421937/content.htm)
+  and [input checks](https://help.sap.com/SAPHELP_SCM700_EHP02/helpdata/EN/4a/43a1d75a503f04e10000000a421937/content.htm).
+- Local correction: native compiler metadata and procedure frames, typed dialog
+  message pauses, FIELD/CHAIN restarts and unmatched-exception rethrow. INTO
+  reuses the existing formatter. Full LUW rollback, formatting and non-PAI
+  error contexts remain explicit limitations; see docs/native-dynpro.md.
+- Regression: `test/native-message.mjs` and native session/HTML cases, registered
+  for release pre-flight. No upstream submission or production pin change.
+
+### ANOMALY-2026-10-17-badi-reference -- BAdI references and calls lack compiler support
+
+- Status: `workaround` -- native adapter in development, not released.
+- Affected versions: `@abaplint/core` 2.120.73 and transpiler 2.14.3.
+- Input: `TYPE REF TO zbadi_policy`, a matching enhancement definition and
+  interface, followed by GET BADI and CALL BADI with RECEIVING.
+- Expected: resolve the declared interface, check method parameters, select
+  implementations and execute the selected methods in the internal session.
+- Actual (source inspection): the type resolver returns a void type; CALL BADI
+  checks argument expressions without resolving the receiver or method; the
+  transpiler has no statement emitter.
+- Local correction: resolve the enhancement's interface and reuse ordinary
+  method syntax checking. The opt-in native adapter dispatches to compiled
+  implementation classes using an explicit, complete active selection.
+- Limits: no filters, dynamic selection/calls or context-dependent instances;
+  default/fallback and new/reused instances are implemented but not yet tested.
+- Regression: `test/native-badi.mjs`, registered for release pre-flight.
+- Upstream: not submitted; behavioral validation remains pending.
+
+### ANOMALY-2026-10-17-kernel-name-operand -- Kernel NAME operand overwrites the function name
+
+- Status: `workaround` -- native adapter in development, not released.
+- Affected version: transpiler 2.14.3.
+- Input: `CALL 'C_SAPGPARAM' ID 'NAME' FIELD name ID 'VALUE' FIELD result.`
+- Actual (source inspection): the generic emitter puts the kernel function
+  name and the NAME argument in the same JavaScript property. The latter
+  replaces the former before dispatch. The core kernel dispatcher also lacks
+  this profile-read service.
+- Local correction: lower the native profile-read call separately. A trusted
+  configuration records the return code and whether the output is written;
+  missing configuration fails explicitly.
+- Reference evidence: a private read-only profile export returned subrc 8 and
+  preserved both a blank and a nonblank output field. No profile value or
+  system identifier is included here.
+- Regression: `test/native-dynpro.mjs` and `test/native-dynpro-transpiler.mjs`;
+  not yet run. Upstream correction not submitted.
+
+### ANOMALY-2026-10-17-function-reference -- Function interface reference flags are ignored
+
+- Status: `workaround` -- local syntax adapter, not released.
+- Affected version: `@abaplint/core` 2.120.73.
+- Input: a function interface with `TYP=LCL_BOX`, `REF_CLASS=X` and a method
+  call through that importing, exporting or changing parameter.
+- Expected: the parameter has the declared reference type. `REFERENCE=X`
+  independently specifies passing by reference.
+- Actual: the XML reader discards `REF_CLASS`; the procedural resolver looks
+  up the class name as a dictionary value type and reports it missing.
+- Local correction: `tools/osd-function-reference.mjs` retains the flag and
+  uses the existing TYPE REF TO resolver in the function's real scope.
+  Parameter direction, passing mode and global-parameter lifetime are retained.
+- Evidence: strict compiler lint of private function interfaces clears the
+  reported reference errors. `test/function-reference.mjs` adds synthetic
+  positive, missing-type and scalar controls; behavioral suite not yet run.
+- Upstream: needs an issue and a reviewed core fix; not submitted.
+
+### ANOMALY-2026-10-17-reference-occurs -- Reference table types lose OCCURS
+
+- Status: `workaround` -- local syntax-resolver adapter, not released.
+- Affected version: `@abaplint/core` 2.120.73.
+- Input: `TYPES ty_refs TYPE REF TO lcl_item OCCURS 0.`
+- Expected: a standard table whose rows are references; APPEND, LOOP and VALUE
+  table construction accept a variable declared with that type.
+- Actual: the resolver returns the row reference before applying OCCURS,
+  producing "not a table type" diagnostics at valid uses.
+- Local correction: `tools/osd-reference-occurs.mjs` preserves the resolved row
+  type and applies the existing table semantics. Scalar references stay scalar.
+- Regression: `test/reference-occurs.mjs`, registered for release pre-flight.
+  Behavioral tests are not yet run; JS syntax check passes.
+- Upstream: needs an issue and a reviewed core fix; not submitted.
+
+### ANOMALY-2026-10-17-dynpro-flow-lines -- Multiline screen fields lose their handlers
+
+- Status: `workaround` -- local converter correction; production unchanged.
+- Affected version: `oisee/open-abap-gui` at `b65c4431d71c7b23468d08bd955b18785fd2ca6c`.
+- Input: screen flow with `FIELD: choice_a, choice_b.`, or a field name and
+  its `MODULE` clause on separate lines, including value/help requests.
+- Expected: preserve statement boundaries, field associations, chain conditions
+  and the original starting line.
+- Actual: physical-line parsing leaves fields unclassified, loses the module's
+  field, or calls `push` on the help-event object instead of its module list.
+- Local correction: read logical flow statements and expand colon chains before
+  classifying them; append help modules to their module list.
+- Regression: `converter/test/unit/dynpro-flow.test.mjs` in the local library
+  checkout. Synthetic names only. Behavioral tests await release pre-flight;
+  JS syntax and private screen-source parser checks pass.
+- Upstream: not submitted; the library pin is unchanged.
+
+### ANOMALY-2026-10-17-gui-message-operands -- Report conversion loses message ID operands
+
+- Status: `workaround` -- local converter correction; production unchanged.
+- Affected version: `oisee/open-abap-gui` at `b65c4431d71c7b23468d08bd955b18785fd2ca6c`.
+- Input: a short-form `MESSAGE` whose class contains `#`, or the long form
+  `MESSAGE ID lv_id TYPE lv_type NUMBER lv_number WITH lv_value`.
+- Expected: preserve message ID, number, type, substitution values and
+  `DISPLAY LIKE` when dispatching through the host session.
+- Actual: both forms fall through to the free-text operand path, yielding
+  invalid generated ABAP and `GGCONV-E202` parser diagnostics in strict mode.
+- Impact: an original transaction entry report cannot pass conversion before
+  its repository, function-group and screen dependencies are considered.
+- Evidence: private local reference source; public regression uses synthetic
+  report and message-class names only. No SAP source belongs in this entry.
+- Local correction: parse long-form operands with abaplint's syntax tree and
+  preserve special characters in parsed short-form message-class names. Both
+  reference entry reports now pass strict conversion; the synthetic message
+  reproducer has no parser diagnostics. This proves syntax, not runtime behavior.
+- Upstream: branch `fix/message-reference-operands` in the local converter
+  checkout; not submitted or pinned by the application. Regression execution
+  and release checks remain deferred under the user's validation policy.
+- Regression: converter `test/unit/converter.test.mjs` message cases.
+- Upstream version containing a fix: unknown.
+
 ### ANOMALY-2026-10-15-tabl-elementary-builtins -- TABL field with COMPTYPE E and no ROLLNAME
 
 - Status: `refused` -- no workaround. On the osabap and osgo build paths gogen names the field and stops before the transpiler's DatabaseSetup (`tools/gogen/frontend-ddic.mjs`, called by `osabap.mjs` and `osg-build.mjs`, transparent tables only). `unit.mjs` and `semantics.mjs` still reach DatabaseSetup unchecked and get its message.

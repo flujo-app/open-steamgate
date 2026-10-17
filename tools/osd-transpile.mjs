@@ -30,6 +30,14 @@ import {isSourceIdentity, inputFoldersOf} from "./osd-packs.mjs";
 import {mapStatementStarts} from "./osd-source-map-starts.mjs";
 import {lowerNarrowSubmit} from "./osd-narrow-submit.mjs";
 import {installRfcMessage} from "./osd-rfc-message.mjs";
+import {installNativeDynproTranspiler} from "./osd-dynpro-transpiler.mjs";
+import {nativeDynproSourceURL} from "./osd-native-dynpro.mjs";
+import {installReferenceOccurs} from "./osd-reference-occurs.mjs";
+import {installFunctionReference} from "./osd-function-reference.mjs";
+import {installBadiTypes, installNativeBadiTranspiler} from "./osd-badi-transpiler.mjs";
+import {nativeBadiSourceURL} from "./osd-native-badi.mjs";
+import {installNativeMessageTranspiler} from "./osd-message-transpiler.mjs";
+import {installNativeDeclarations} from "./osd-native-declarations.mjs";
 import {libraryPath} from "./osd-lib-path.mjs";
 import {orderRegistry} from "./osd-warm-order.mjs";
 
@@ -62,6 +70,19 @@ export function modulesOf(root) {
   if (!LOADED_IDENTITIES.has(Transpiler)) LOADED_IDENTITIES.set(Transpiler, identity);
   const core = fromTranspiler("@abaplint/core");
   const {CallFunctionTranspiler} = fromTranspiler(join(where, 'build/src/statements/call_function.js'));
+  const {CallTranspiler} = fromTranspiler(join(where, 'build/src/statements/call.js'));
+  const {MethodCallBodyTranspiler} = fromTranspiler(join(where, 'build/src/expressions/method_call_body.js'));
+  const {MethodCallParamTranspiler} = fromTranspiler(join(where, 'build/src/expressions/method_call_param.js'));
+  const {DataTranspiler} = fromTranspiler(join(where, 'build/src/statements/data.js'));
+  const {FieldChainTranspiler} = fromTranspiler(join(where, 'build/src/expressions/field_chain.js'));
+  const {HandleABAP} = fromTranspiler(join(where, 'build/src/handlers/handle_abap.js'));
+  const {InlineDeclarations} = fromTranspiler(join(where, 'build/src/inline.js'));
+  const {Traversal} = fromTranspiler(join(where, 'build/src/traversal.js'));
+  const {BasicTypes: TypeParser} = fromTranspiler('@abaplint/core/build/src/abap/5_syntax/basic_types.js');
+  const {FunctionModuleDefinition} = fromTranspiler('@abaplint/core/build/src/abap/types/function_module_definition.js');
+  const {Procedural} = fromTranspiler('@abaplint/core/build/src/abap/5_syntax/_procedural.js');
+  const {CallBadi: CallBadiSyntax} = fromTranspiler('@abaplint/core/build/src/abap/5_syntax/statements/call_badi.js');
+  const {Call: CallSyntax} = fromTranspiler('@abaplint/core/build/src/abap/5_syntax/statements/call.js');
   let plugin;
   try {
     // the CLI's optional plugin, resolved from the project as it does it
@@ -69,7 +90,7 @@ export function modulesOf(root) {
   } catch {
     plugin = undefined;
   }
-  return prepareModules({Transpiler, Chunk, core, CallFunctionTranspiler, validationConfig, plugin, where, identityRoot: root, identity: LOADED_IDENTITIES.get(Transpiler), version: JSON.parse(readFileSync(join(where, "package.json"), "utf8")).version});
+  return prepareModules({Transpiler, Chunk, core, Traversal, TypeParser, FunctionModuleDefinition, Procedural, CallBadiSyntax, CallSyntax, CallFunctionTranspiler, CallTranspiler, MethodCallBodyTranspiler, MethodCallParamTranspiler, DataTranspiler, FieldChainTranspiler, HandleABAP, InlineDeclarations, validationConfig, plugin, where, identityRoot: root, identity: LOADED_IDENTITIES.get(Transpiler), version: JSON.parse(readFileSync(join(where, "package.json"), "utf8")).version});
 }
 
 // Install on the selected copy, including bundled hosts and explicit modules.
@@ -86,6 +107,15 @@ function prepareModules(modules) {
     VALIDATION_NORMALIZED.add(modules.Transpiler);
   }
   installRfcMessage(modules.CallFunctionTranspiler, modules.Chunk, modules.core);
+  if (modules.Traversal) installNativeDynproTranspiler(modules);
+  if (modules.TypeParser) {
+    installReferenceOccurs(modules.TypeParser, modules.core);
+    installBadiTypes(modules);
+  }
+  if (modules.FunctionModuleDefinition && modules.Procedural) installFunctionReference(modules);
+  if (modules.Traversal) installNativeBadiTranspiler(modules);
+  if (modules.Traversal) installNativeMessageTranspiler(modules);
+  if (modules.Traversal) installNativeDeclarations(modules);
   return modules;
 }
 export function selectedModules(root, explicit) {
@@ -281,9 +311,25 @@ export function outputFiles(output, config, outputFolder, files) {
     out.push({path: join(outputFolder, "index.mjs"), contents: output.unitTestScript});
     out.push({path: join(outputFolder, "_unit_open.mjs"), contents: output.unitTestScriptOpen});
   }
-  out.push({path: join(outputFolder, "init.mjs"), contents: output.initializationScript});
+  let initialization = output.initializationScript;
+  let top = `import runtime from "@abaplint/runtime";\nglobalThis.abap = new runtime.ABAP();`;
+  if (config.options?.nativeDynpro === true) {
+    // MODULE registration happens while function groups load. The dialog stack
+    // must already exist in both bootstrap variants, before those imports run.
+    const marker = 'globalThis.abap = new runtime.ABAP();';
+    if (initialization.split(marker).length !== 2) throw new Error('Unknown native dynpro runtime bootstrap');
+    const install = `${marker}\nnew NativeDynproRuntime(globalThis.abap);\nnew NativeBadiRuntime(globalThis.abap);`;
+    const dependency = 'import {NativeDynproRuntime} from "./_dynpro-runtime.mjs";\nimport {NativeBadiRuntime} from "./_badi-runtime.mjs";\n';
+    initialization = initialization.replace(marker, 'await import("./_top.mjs");');
+    top = dependency + top.replace(marker, install);
+    out.push({path: join(outputFolder, '_dynpro-runtime.mjs'),
+      contents: readFileSync(new URL(nativeDynproSourceURL), 'utf8')});
+    out.push({path: join(outputFolder, '_badi-runtime.mjs'),
+      contents: readFileSync(new URL(nativeBadiSourceURL), 'utf8')});
+  }
+  out.push({path: join(outputFolder, "init.mjs"), contents: initialization});
   out.push({path: join(outputFolder, "_init.mjs"), contents: output.initializationScript2});
-  out.push({path: join(outputFolder, "_top.mjs"), contents: `import runtime from "@abaplint/runtime";\nglobalThis.abap = new runtime.ABAP();`});
+  out.push({path: join(outputFolder, "_top.mjs"), contents: top});
   return out;
 }
 
@@ -305,6 +351,12 @@ export async function transpile(options = {}) {
   const libs = await loadLibs(root, config, log, options.onRead);
   options.onInputs?.(files, libs);
   const settings = {...config.options};
+  if (settings.nativeDynpro === true && settings.importProg === true) {
+    throw new Error('Native transaction programs must be entered after bootstrap, not imported during it');
+  }
+  if (settings.nativeDynpro === true && !loaded.Traversal) {
+    throw new Error("This host does not expose the native dynpro compiler adapter");
+  }
   if (config.write_source_map !== true) {
     settings.ignoreSourceMap = true;
   }

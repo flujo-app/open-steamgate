@@ -25,6 +25,11 @@ import * as core from "@abaplint/core";
 import {Transpiler, Chunk} from "@abaplint/transpiler";
 import {config as validationConfig} from "@abaplint/transpiler/build/src/validation.js";
 import {CallFunctionTranspiler} from "@abaplint/transpiler/build/src/statements/call_function.js";
+import {BasicTypes as TypeParser} from "@abaplint/core/build/src/abap/5_syntax/basic_types.js";
+import {FunctionModuleDefinition} from "@abaplint/core/build/src/abap/types/function_module_definition.js";
+import {Procedural} from "@abaplint/core/build/src/abap/5_syntax/_procedural.js";
+import {CallBadi as CallBadiSyntax} from "@abaplint/core/build/src/abap/5_syntax/statements/call_badi.js";
+import {Call as CallSyntax} from "@abaplint/core/build/src/abap/5_syntax/statements/call.js";
 import * as guiConverter from "../.local/lars/open-abap-gui/converter/src/api.mjs";
 import * as setup from "../test/setup.mjs";
 import {pathToFileURL} from "node:url";
@@ -112,7 +117,7 @@ if (typeof Bun !== "undefined") {
     },
   });
 }
-setHostModules({identity: toolchainIdentity, Transpiler, Chunk, core, CallFunctionTranspiler, validationConfig, guiConverter: embeddedSeed ? guiConverter : undefined, plugin: undefined, where: "bundled", version: "bundled"});
+setHostModules({identity: toolchainIdentity, Transpiler, Chunk, core, TypeParser, FunctionModuleDefinition, Procedural, CallBadiSyntax, CallSyntax, CallFunctionTranspiler, validationConfig, guiConverter: embeddedSeed ? guiConverter : undefined, plugin: undefined, where: "bundled", version: "bundled"});
 
 const GENERATORS = {
   "osd-layer.mjs": () => import("../tools/osd-layer.mjs"),

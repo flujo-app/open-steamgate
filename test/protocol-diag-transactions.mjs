@@ -15,6 +15,19 @@ const response = body => new Response(body, {headers: {"content-type": "text/htm
 const click = (session, screen, caption) => session.step({command: screen.elements.find(e => e.caption === caption).command});
 
 describe("interactive DIAG transactions", () => {
+  it("selects one radio per form group and submits its declared value", async () => {
+    const html = '<form method="post" action="/sap/bc/osd/native-dynpro">' +
+      '<label for="a">First</label><input id="a" type="radio" name="mode" value="A" checked>' +
+      '<label for="b">Second</label><input id="b" type="radio" name="mode" value="B"><button>Choose</button></form>';
+    const requests = [];
+    const session = new WebguiSession({backend:base,fetchImpl:async (_url, init) => { requests.push(init); return response(html); }});
+    const screen = await session.start();
+    const field = screen.elements.find(e => e.kind === 'field' && e.name === 'Second');
+    assert.equal(field.checkbox,true);
+    await session.step({fields:[{row:field.row,col:field.col,value:'X'}],
+      command:screen.elements.find(e => e.caption === 'Choose').command});
+    assert.deepEqual(new URLSearchParams(requests[1].body).getAll('mode'),['B']);
+  });
   it("submits an upstream-style icon toolbar button with its explicitly associated selection form", async () => {
     const html = '<button type="submit" form="selection" name="gg_ucomm" value="ONLI" aria-label="Execute"><svg></svg></button>' +
       '<form id="selection" method="post" action="/sap/bc/osd/dispatch"><input type="hidden" name="session_id" value="state">' +

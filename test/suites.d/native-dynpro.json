@@ -1,0 +1,3 @@
+{
+  "files": ["test/native-dynpro.mjs", "test/native-dynpro-transpiler.mjs", "test/native-dynpro-session.mjs", "test/native-badi.mjs", "test/native-message.mjs", "test/native-declarations.mjs", "test/reference-occurs.mjs", "test/function-reference.mjs"]
+}

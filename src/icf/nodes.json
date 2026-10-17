@@ -56,6 +56,10 @@
     "type": "HOST", "host": "test/start.mjs", "handler": "ready", "needs": "state",
     "text": "readiness from host memory, independent of the ABAP work process"
   },
+  "/sap/bc/osd/native-dynpro": {
+    "type": "HOST", "host": "test/start.mjs", "handler": "native-dynpro", "needs": "state",
+    "text": "isolated native dialog transactions from a local generation; enabled only by OSD_NATIVE_DYNPRO_CONFIG"
+  },
   "/osd/not-served": {
     "type": "HOST", "host": "test/start.mjs", "handler": "not-served", "needs": "state",
     "text": "what the facade could not answer, held in this process's memory"
