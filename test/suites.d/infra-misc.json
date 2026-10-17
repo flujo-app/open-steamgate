@@ -20,6 +20,7 @@
     "test/ddic-reserved.mjs",
     "test/unit-risk.mjs",
     "test/protocol-diag.mjs",
+    "test/protocol-diag-transactions.mjs",
     "test/protocol-ni.mjs",
     "test/protocol-rfc.mjs",
     "test/osd-bind.mjs",

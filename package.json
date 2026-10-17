@@ -155,8 +155,9 @@
   },
   "dependencies": {
     "@duckdb/duckdb-wasm": "1.32.0",
+    "diff": "^7.0.0",
     "open-rfc": "^0.2.3",
-    "diff": "^7.0.0"
+    "parse5": "7.3.0"
   },
   "optionalDependencies": {
     "hdb": "^2.29.6"

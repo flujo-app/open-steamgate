@@ -1,4 +1,67 @@
-# DIAG, from the dispatcher's side: what a stub screen would take
+# DIAG listener and transaction bridge
+
+## Interactive listener
+
+`tools/protocols/server.mjs` now starts `listenDiag`, which connects each DIAG
+socket to the existing runtime's WebGUI transaction handlers. The backend is
+`STG_ADT_BACKEND`, or the local `STG_PORT` HTTP listener. Native SAP GUI uses
+the instance's `32NN` port; a headless DIAG client uses the same endpoint.
+The explicit `createDiagTapeServer` / `listenDiagTape` APIs remain for fixtures.
+
+Enter a transaction such as `SE16` or `ZOSD_NOTE` in the command field (or use
+`/nSE16`). Labels, text inputs, checkboxes, links, form submission, and HTML
+viewer `srcdoc` content are rendered as plain dynpro controls. The runtime
+executes the transaction, including its existing ABAP PBO/PAI and session
+storage; the listener does not implement another transaction engine. Hidden
+fields, duplicate form names and individual submit-button actions survive
+the translation. Use Next/Previous page for longer forms and table results.
+Fields retain edits across pages. Back/F3 restores the previous view without
+replaying a POST; Home or `/n` returns to the transaction menu. F8/Enter submits
+the first form action; `/i` and Exit end the connection.
+
+Each connection has separate form, history, and cookie state. Requests run
+serially, with bounded NI payloads, request queues, HTML responses, history,
+and backend timeouts. Old button IDs cannot submit a newer screen. Backend
+requests follow only same-origin WebGUI/OSD paths and never execute scripts.
+The initial shell/PF status is emitted once; subsequent dialog steps replace
+the dynpro and increment the roundtrip counter. Idle sessions expire after
+15 minutes rather than the fixture's 12-second hold.
+
+This is a **private development listener with a demo identity**, not SAP
+authentication or an SAP dispatcher replacement. Keep it on a trusted
+interface or authenticated tunnel. It exposes the transactions that the
+runtime can already execute. It does not add a general dynpro processor,
+arbitrary report execution, ALV/CFW/browser controls, selection lists, rich
+editors, multi-window `/o`, or Unicode codepage negotiation. Editable text is
+currently ASCII, with 64 characters per field; display text is transliterated.
+Native edit buffers use a 24-bit text length, including padded buffers larger
+than 255 bytes. Each screen replacement resets the native controls. Unsupported destinations or
+controls report that WebGUI is required. A timeout after a POST can leave an
+unknown outcome, so check state before repeating a mutating action.
+
+Regression coverage is in `test/protocol-diag-transactions.mjs`; the historical
+wire research and original tape fixture are documented below.
+
+### Upstream reuse audit (2026-10-17)
+
+The implementation keeps the existing substrate. `libs.lock.json` already
+pins open-abap-core, the transpiler and open-abap-gui. The latter's current
+[converter and framework](https://github.com/open-abap/open-abap-gui) support
+classic reports and dynpro processing rendered as HTML; Steamgate's report
+wrappers drive that host (see [gui-reports.md](gui-reports.md)). Updating that
+library alone does not add a DIAG transport.
+
+[open-diag-go](https://github.com/oisee/open-diag-go), audited at
+`62029ee085bca840ba48778dad51c893e98d0ebc`, is MIT-licensed. Its `pkg/diag`
+and `pkg/frame` are the source of the atom and PAI layouts used here; its
+`pkg/lsd` / `cmd/osd-up` integration still serves a still-screen or animation
+stub, without transaction dispatch. [sap-lsd](https://github.com/oisee/sap-lsd)
+is a demo application using the same protocol research, not an ABAP backend.
+The needed seam is thus runtime HTML forms to DIAG dialog steps. The existing
+JavaScript protocol host owns that seam, without adding a second Go service
+or duplicating Lars's ABAP execution framework.
+
+## Historical dispatcher-side survey
 
 The compatibility graph now tells Eclipse this system can drive SAP GUI
 ([`adt-facade.mjs`](../tools/adt-facade.mjs), `COM.SAP.ADT.SAPGUI`), so running

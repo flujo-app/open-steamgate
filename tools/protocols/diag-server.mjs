@@ -1,4 +1,5 @@
-// MIT-licensed capture-free DIAG tape stub for open-steamgate.
+// SPDX-License-Identifier: MIT
+// Interactive DIAG transaction listener and explicit tape fixture API.
 
 import {identity} from "../osd-identity.mjs";
 import {createServer} from "node:net";
@@ -9,6 +10,8 @@ import {
 } from "./diag.mjs";
 import {encodeNIFrame, NIFrameDecoder, NI_PONG, niControl} from "./ni.mjs";
 import {decompressSAP} from "./sap-compress.mjs";
+import {buildDynproScreen, readDynproInput} from "./diag-dynpro.mjs";
+import {WebguiSession} from "./diag-webgui.mjs";
 
 const DEFAULT_DIAG_MAX_PAYLOAD = 1024 * 1024;
 const DEFAULT_IDLE_TIMEOUT_MS = 30_000;
@@ -130,6 +133,67 @@ export async function listenDiagTape({port, host, env = process.env, logger, sid
   return server;
 }
 
+/** One runtime form session per NI connection. Tape mode remains an explicit
+ * fixture API; production uses this interactive listener. */
+export function createDiagServer({backend = "http://127.0.0.1:3030", sid = identity().sid,
+  logger = () => {}, maxPayloadLength = DEFAULT_DIAG_MAX_PAYLOAD,
+  idleTimeoutMs = 15 * 60_000, maxConnections = DEFAULT_MAX_CONNECTIONS,
+  sessionFactory = options => new WebguiSession(options)} = {}) {
+  const sessionEnd = encodeNIFrame(encodeDiagMessage({comFlag: 0x0a, msgInfo: 1}, []));
+  const server = createServer(socket => {
+    const peer = `${socket.remoteAddress ?? "peer"}:${socket.remotePort ?? "?"}`;
+    const decoder = new NIFrameDecoder({maxPayloadLength});
+    const abort = new AbortController();
+    const session = sessionFactory({backend, signal: abort.signal});
+    let first = true, counter = 0, queued = 0, ending = false;
+    let queue = Promise.resolve();
+    const fail = error => { logger("protocol-error", peer, error); socket.destroy(); };
+    socket.setTimeout(idleTimeoutMs, () => { ending = true; abort.abort(); socket.end(sessionEnd); });
+    socket.on("data", chunk => {
+      try {
+        for (const payload of decoder.push(chunk)) {
+          if (ending) break;
+          const control = niControl(payload);
+          if (control === "NI_PING") { socket.write(encodeNIFrame(NI_PONG)); continue; }
+          if (control === "NI_PONG") continue;
+          if (++queued > 8) throw new Error("too many pending DIAG requests");
+          const initial = first;
+          const message = parseClientMessage(payload, first); first = false;
+          queue = queue.then(async () => {
+            if (socket.destroyed || ending) return;
+            const screen = initial ? await session.start() : await session.step(readDynproInput(message.items));
+            if (socket.destroyed || ending) return;
+            if (screen.exit || (!initial && (message.header[1] & 0x08))) {
+              ending = true; socket.end(sessionEnd); return;
+            }
+            const response = encodeNIFrame(buildDynproScreen(screen, {sid, initial, counter: counter++}));
+            if (!socket.write(response)) {
+              socket.pause(); socket.once("drain", () => socket.resume());
+            }
+          }).catch(fail).finally(() => { queued--; });
+        }
+      } catch (error) { fail(error); }
+    });
+    socket.on("end", () => { try { decoder.finish(); } catch (error) { logger("protocol-error", peer, error); } });
+    socket.on("error", error => logger("socket-error", peer, error));
+    socket.on("close", () => { ending = true; abort.abort(); logger("close", peer); });
+  });
+  server.maxConnections = maxConnections;
+  return server;
+}
+
+export async function listenDiag({port, host, env = process.env, ...options} = {}) {
+  if (!Number.isSafeInteger(port) || port < 0 || port > 65535) throw new RangeError("invalid DIAG port");
+  const server = createDiagServer({sid: identity(env).sid, ...options});
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    const done = () => { server.off("error", reject); resolve(); };
+    if (host === undefined) listenBound(server, port, env, done);
+    else server.listen(port, host, done);
+  });
+  return server;
+}
+
 function instancePort(value) {
   if (!/^\d{2}$/.test(value)) throw new Error(`INSTANCE must be two digits, got ${JSON.stringify(value)}`);
   return 3200 + Number(value);
@@ -138,8 +202,8 @@ function instancePort(value) {
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const port = process.env.DIAG_PORT ? Number(process.env.DIAG_PORT) : instancePort(process.env.INSTANCE ?? "00");
   const host = process.env.DIAG_HOST;
-  const server = await listenDiagTape({port, host, logger: (event, peer, error) => {
+  const server = await listenDiag({port, host, backend: process.env.STG_ADT_BACKEND, logger: (event, peer, error) => {
     if (error) console.error(`diag ${event} ${peer}:`, error.message);
   }});
-  console.log(`OSD JS DIAG tape stub listening on ${host ?? describeBind()} port ${server.address().port}`);
+  console.log(`OSD JS DIAG transactions listening on ${host ?? describeBind()} port ${server.address().port}`);
 }
