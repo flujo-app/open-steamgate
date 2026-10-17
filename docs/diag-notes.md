@@ -35,7 +35,8 @@ arbitrary report execution, ALV/CFW/browser controls, selection lists, rich
 editors, multi-window `/o`, or Unicode codepage negotiation. Editable text is
 currently ASCII, with 64 characters per field; display text is transliterated.
 Native edit buffers use a 24-bit text length, including padded buffers larger
-than 255 bytes; only bytes before the first NUL are field content. Each
+than 255 bytes; content is bounded by the declared character capacity and
+the first NUL, ignoring unused native buffer bytes. Each
 screen replacement resets the native controls. Unsupported destinations or
 controls report that WebGUI is required. A timeout after a POST can leave an
 unknown outcome, so check state before repeating a mutating action.

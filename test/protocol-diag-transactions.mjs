@@ -77,8 +77,8 @@ describe("interactive DIAG transactions", () => {
     value.copy(native, 0, 0, 19); native.writeUInt16BE(native.length);
     native.writeUIntBE(2048, 13, 3); Buffer.from("native input").copy(native, 19);
     assert.equal(readDynproInput([{type: 0x10, id: 9, sid: 2, value: native}]).fields[0].value, "native input");
-    // Buffer capacity is not string length: ignore bytes after the terminator.
-    native[19 + 64] = 0; native.fill(0xff, 19 + 65);
+    // Never read beyond the declared field capacity, even before the first NUL.
+    native.fill(0xff, 19 + 60); native[19 + 67] = 0;
     assert.equal(readDynproInput([{type: 0x10, id: 9, sid: 2, value: native}]).fields[0].value, "native input");
     const broken = Buffer.from(value); broken.writeUInt16BE(65535);
     assert.throws(() => readDynproInput([{type: 0x10, id: 9, sid: 2, value: broken}]), /length/);

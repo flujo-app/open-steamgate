@@ -58,8 +58,13 @@ export function readDynproInput(items) {
         // can leave unrelated buffer contents after that terminator.
         const length = type === 0x80 ? 0 : data.readUIntBE(13, 3);
         if (19 + length > len && type !== 0x80) throw new Error("dynpro field text overruns atom");
+        // Capacity and text bytes differ on native clients: a 64-character
+        // field may arrive in a 2048-byte buffer containing bytes outside the
+        // field. Never interpret that tail as input, even before its first NUL.
+        const capacity = type === 0x80 ? 0 : data.readUInt16BE(17);
+        const textLength = capacity ? Math.min(length, capacity) : length;
         fields.push({row: data.readUInt16BE(8), col: data.readUInt16BE(10),
-          value: type === 0x80 ? data[13] === 0x58 : data.subarray(19, 19 + length).toString("latin1").split("\0", 1)[0].trimEnd()});
+          value: type === 0x80 ? data[13] === 0x58 : data.subarray(19, 19 + textLength).toString("latin1").split("\0", 1)[0].trimEnd()});
       }
       off += len;
     }
