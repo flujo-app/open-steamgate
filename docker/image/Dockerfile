@@ -31,4 +31,4 @@ VOLUME ["/data", "/opt/osd/.local/tls"]
 EXPOSE 3030 44300
 HEALTHCHECK --interval=15s --timeout=12s --start-period=120s --retries=10 \
     CMD ["node", "docker/image/healthcheck.mjs"]
-ENTRYPOINT ["node", "docker/image/entrypoint.mjs"]
+ENTRYPOINT ["node", "docker/image/workspace.mjs"]

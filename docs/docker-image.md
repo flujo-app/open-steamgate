@@ -187,6 +187,26 @@ the immutable `sha-…-run-…` tag from its successful Actions summary.
 Do not delete existing volumes or use `down -v` to upgrade a real stack.
 Existing-volume schema upgrades are a separate release gate. For this draft,
 persist database and TLS volumes; source/ADT edits inside the container are
-ephemeral across container replacement. Internal HTTP/TLS ports stay fixed;
+ephemeral across container replacement unless a durable workspace is configured.
+Set `OSD_WORKSPACE` to a new absolute directory on a persistent volume, for example
+`/data/workspace`. The optional workspace entry point copies the image's sources,
+compiler and compiled generations together on first start, then reuses that
+directory, including subsequent saved source and inactive versions. Allow room
+for the full installed system and retained generations, not just the database.
+Existing unmarked directories are refused; an interrupted seed remains beside
+its target and is never started.
+
+For a development system in child serving mode, also set
+`OSD_ADT_ONE_RUNTIME=1`. This uses the existing STORE process bridge so WebGUI,
+native DIAG and ADT share one repository and publication owner. Without it,
+the WebGUI child can open a separate store: a new program may be invisible to
+ADT and an editor activation does not establish that the serving code changed.
+Verify activation by executing the new program through a fresh client.
+
+The workspace is pinned to its seed image and Node major version. An image change
+is refused without touching saved source; keep the previous image available and
+migrate a copy of the workspace deliberately before upgrading. Replacing a
+container with the same image preserves saved and inactive programs.
+Internal HTTP/TLS ports stay fixed;
 Compose derives the external ports from INSTANCE. Global identity/instance
 harmonization in ABAP/System Status remains separate work.

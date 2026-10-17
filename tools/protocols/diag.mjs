@@ -121,7 +121,7 @@ export function parseDiagItems(value) {
   return output;
 }
 
-function encodeAtomHeader({type, row, col, body}) {
+export function encodeAtomHeader({type, row, col, body}) {
   const atomBody = bytes(body, "DIAG atom body");
   const length = u16(12 + atomBody.length, "DIAG atom length");
   const output = Buffer.allocUnsafe(length);

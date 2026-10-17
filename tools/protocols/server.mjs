@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-// One host for OSD's built-in DIAG tape screen and RFC-to-ADT bridge.
+// One host for OSD's DIAG transactions and RFC-to-ADT bridge.
 import {pathToFileURL} from "node:url";
-import {listenDiagTape} from "./diag-server.mjs";
+import {listenDiag} from "./diag-server.mjs";
 import {createRfcAdtServer} from "./rfc-server.mjs";
 import {identity} from "../osd-identity.mjs";
 
@@ -26,7 +26,8 @@ export async function listenProtocols(env = process.env) {
   const diagPort = Number(env.STG_DIAG_PORT ?? `32${id}`);
   const rfcPort = Number(env.STG_RFC_PORT ?? `33${id}`);
   const backend = env.STG_ADT_BACKEND ?? `http://127.0.0.1:${env.STG_PORT ?? 3030}`;
-  const diag = await listenDiagTape({
+  const diag = await listenDiag({
+    backend,
     port: diagPort,
     host: env.STG_DIAG_HOST,
     env,

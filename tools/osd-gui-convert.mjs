@@ -51,6 +51,18 @@ const CONVERTER = "converter/src/api.mjs";
  * returns its typed result. No transaction session or HTML is involved. */
 export function batchRegistrySource(reports) {
   const known = reports.filter((entry) => entry.programName !== undefined);
+  // Interactive execution must not disguise partial/skeleton conversion as
+  // the user's complete program. Keep its refusal beside the generated name
+  // mapping, so a workbench never guesses a wrapper or runs inactive source.
+  const dialogCases = known.map(entry => {
+    const runnable = entry.wired === true && entry.mode === "strict";
+    const reason = entry.skipped ?? (runnable ? "" : "Only a partial conversion is available; the complete program cannot run.");
+    return `      WHEN ${abapLiteral(entry.programName)}.
+        rs_program-name = ${abapLiteral(entry.programName)}.
+        rs_program-tcode = ${abapLiteral(runnable ? entry.tcode : "")}.
+        rs_program-mode = ${abapLiteral(entry.mode ?? "unsupported")}.
+        rs_program-reason = ${abapLiteral(reason)}.`;
+  }).join("\n");
   const supported = known.filter((entry) => entry.wired === true)
     .map((entry) => `      WHEN ${abapLiteral(entry.programName)}. rv_supported = abap_true.`).join("\n");
   const cases = known.map((entry) => `      WHEN ${abapLiteral(entry.programName)}.
@@ -62,6 +74,15 @@ ${(entry.selectionElements ?? []).filter((element) => /\bLOWER\s+CASE\b/i.test(s
         RETURN.`}`).join("\n");
   return `CLASS zcl_osd_batch_report DEFINITION PUBLIC FINAL CREATE PUBLIC.
   PUBLIC SECTION.
+    TYPES: BEGIN OF ty_program,
+             name TYPE string,
+             tcode TYPE string,
+             mode TYPE string,
+             reason TYPE string,
+           END OF ty_program.
+    CLASS-METHODS dialog_program
+      IMPORTING iv_program TYPE string
+      RETURNING VALUE(rs_program) TYPE ty_program.
     TYPES: BEGIN OF ty_result,
              status   TYPE string,
              detail   TYPE string,
@@ -94,6 +115,13 @@ ${(entry.selectionElements ?? []).filter((element) => /\bLOWER\s+CASE\b/i.test(s
 ENDCLASS.
 
 CLASS zcl_osd_batch_report IMPLEMENTATION.
+  METHOD dialog_program.
+    CASE to_upper( iv_program ).
+${dialogCases}
+      WHEN OTHERS.
+        rs_program-reason = |Program { iv_program } is not in the active converted-report generation. Activate it first.|.
+    ENDCASE.
+  ENDMETHOD.
   METHOD supports.
     DATA lv_program TYPE string.
     lv_program = iv_program.

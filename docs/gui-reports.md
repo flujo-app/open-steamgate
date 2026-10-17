@@ -138,6 +138,17 @@ cross-process continuation, or support for a report the converter skips.
 Two different files declaring the same `REPORT` name fail the generator before
 it replaces the previous output, since they would create duplicate dispatch
 arms and generated class names.
+
+The workbench's Execute action uses the same generator's
+`ZCL_OSD_BATCH_REPORT=>DIALOG_PROGRAM` metadata: program name, generated
+transaction, conversion mode and refusal reason. It publishes a dialog target
+only for strict conversion. The existing partial/skeleton fallback remains
+available to its established callers, but the workbench cannot present that
+skeleton as execution of the complete source. Its handler also checks that the
+repository object exists and is active before redirecting to the generated
+transaction, whose existing host handles selection screens and list events.
+This workbench path is a local development change pending full runtime release
+validation; it does not expand the converter's language coverage.
 `test/unit/zcl_osd_batch_runner_test.clas.testclasses.abap` executes the
 converted `ZGG_EX_012` twice: first with a supplied date, then with its own
 `INITIALIZATION` default, proving one call does not leak selection state into

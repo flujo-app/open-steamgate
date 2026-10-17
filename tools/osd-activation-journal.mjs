@@ -1,5 +1,6 @@
 // Publication tickets belong to the source host, outside the serving child.
-import {existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync, rmdirSync} from "node:fs";
+import {existsSync, mkdirSync, readFileSync, writeFileSync, renameSync} from "node:fs";
+import {acquireJournalOwner} from "./osd-journal-owner.mjs";
 import {join, resolve} from "node:path";
 import {randomUUID} from "node:crypto";
 import {mkdirDurable, writeDurable, renameDurable} from "./osd-durable.mjs";
@@ -195,30 +196,7 @@ export function activationJournal(store) {
   if (!journals.has(key)) {
     const directory = join(root, ".local", "activation", host);
     mkdirSync(directory, {recursive: true});
-    const ownerFile = join(directory, "owner.pid");
-    try { writeFileSync(ownerFile, String(process.pid), {flag: "wx"}); }
-    catch (e) {
-      if (e.code !== "EEXIST") throw e;
-      const owner = Number(readFileSync(ownerFile, "utf8"));
-      if (!Number.isInteger(owner) || owner <= 0) throw error("CONFLICT", "invalid activation journal owner");
-      try { process.kill(owner, 0); }
-      catch (alive) {
-        if (alive.code !== "ESRCH") throw alive;
-        const takeover = join(directory, "takeover.lock");
-        try { mkdirSync(takeover); }
-        catch { throw error("CONFLICT", "activation journal ownership takeover is busy"); }
-        try {
-          if (readFileSync(ownerFile, "utf8") !== String(owner)) throw error("CONFLICT", "activation journal owner changed");
-          unlinkSync(ownerFile);
-          writeFileSync(ownerFile, String(process.pid), {flag: "wx"});
-        } finally {
-          rmdirSync(takeover);
-        }
-      }
-      if (owner !== process.pid && readFileSync(ownerFile, "utf8") !== String(process.pid)) {
-        throw error("CONFLICT", "activation journal is owned by another source host");
-      }
-    }
+    acquireJournalOwner(directory);
     journals.set(key, new ActivationJournal(root, {host}));
   }
   return journals.get(key);
@@ -235,7 +213,8 @@ export function forgetMissingObjectOutcomes(store) {
     // Detached runners and serving children read the source host's tree. They
     // must not claim its journal just because they construct a read-only store.
     try {
-      const owner = Number(readFileSync(join(directory, "owner.pid"), "utf8"));
+      const record = JSON.parse(readFileSync(join(directory, "owner.pid"), "utf8"));
+      const owner = typeof record === "number" ? record : record?.pid;
       if (owner > 0 && owner !== process.pid) {
         try {process.kill(owner, 0); return;}
         catch (error) {if (error.code !== "ESRCH") return;}
