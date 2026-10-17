@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<abapGit version="v1.0.0" serializer="LCL_OBJECT_TRAN" serializer_version="v1.0.0">
+ <asx:abap xmlns:asx="http://www.sap.com/abapxml" version="1.0"><asx:values>
+  <TSTC><TCODE>SE38</TCODE><PGMNA>ZCL_OSD_WORKBENCH</PGMNA></TSTC>
+  <TSTCC><TCODE>SE38</TCODE><S_WEBGUI>1</S_WEBGUI></TSTCC>
+  <TSTCT><SPRSL>E</SPRSL><TCODE>SE38</TCODE><TTEXT>ABAP Editor</TTEXT></TSTCT>
+  <TSTCP><TCODE>SE38</TCODE><PARAM>\PROGRAM=ZCL_OSD_WORKBENCH\CLASS=ZCL_OSD_WORKBENCH\METHOD=ZIF_OSD_TRANSACTION~PBO</PARAM></TSTCP>
+ </asx:values></asx:abap>
+</abapGit>

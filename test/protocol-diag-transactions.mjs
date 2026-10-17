@@ -15,6 +15,82 @@ const response = body => new Response(body, {headers: {"content-type": "text/htm
 const click = (session, screen, caption) => session.step({command: screen.elements.find(e => e.caption === caption).command});
 
 describe("interactive DIAG transactions", () => {
+  it("submits an upstream-style icon toolbar button with its explicitly associated selection form", async () => {
+    const html = '<button type="submit" form="selection" name="gg_ucomm" value="ONLI" aria-label="Execute"><svg></svg></button>' +
+      '<form id="selection" method="post" action="/sap/bc/osd/dispatch"><input type="hidden" name="session_id" value="state">' +
+      '<input name="P_VALUE" value="initial"></form><input form="selection" name="extra" value="kept">';
+    const requests = [];
+    const session = new WebguiSession({backend: base, fetchImpl: async (url, init) => {
+      requests.push({url: String(url), ...init}); return response(html);
+    }});
+    const screen = await session.start();
+    const field = screen.elements.find(e => e.name === "P_VALUE");
+    await session.step({command: screen.elements.find(e => e.caption === "Execute").command,
+      fields: [{row: field.row, col: field.col, value: "WBPROBE"}]});
+    const params = new URLSearchParams(requests[1].body);
+    assert.equal(requests[1].method, "POST"); assert.equal(new URL(requests[1].url).pathname, "/sap/bc/osd/dispatch");
+    assert.equal(params.get("P_VALUE"), "WBPROBE"); assert.equal(params.get("gg_ucomm"), "ONLI");
+    assert.equal(params.get("session_id"), "state"); assert.equal(params.get("extra"), "kept");
+  });
+  it("keeps form associations inside their own iframe and ignores missing form owners", () => {
+    const inner = '<button form="same" aria-label="Inner">icon</button><form id="same" action="/inner"><input name="b"></form>';
+    const page = parseWebgui('<form id="same" action="/outer"><input name="a"></form>' +
+      '<iframe srcdoc="' + inner.replaceAll('"', '&quot;') + '"></iframe><button form="missing">Invalid</button>', base);
+    const button = page.rows.find(r => r.caption === "Inner");
+    assert.equal(button.action.form.action, "/inner");
+    assert.equal(page.rows.some(r => r.caption === "Invalid"), false);
+    assert.deepEqual(button.action.form.controls.map(c => c.name), ["b"]);
+  });
+  it("submits full verified editor source and keeps Check changes dirty until explicitly discarded", async () => {
+    const escape = value => value.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+    const original = "REPORT zexample.\nWRITE 'initial'.\n";
+    const changed = "  REPORT zexample.\n" + " ".repeat(600) + "WRITE '<&>'.\t   \n";
+    const form = (source, message = "") => `<title>Editor</title><form method="post" action="/sap/bc/osd/edit"><input type="hidden" name="name" value="ZEXAMPLE"><textarea name="src">${escape(source)}</textarea><button name="do" value="check">Check</button><button name="do" value="save">Save</button></form>${message}`;
+    const requests = [];
+    const session = new WebguiSession({backend: base, fetchImpl: async (url, init) => {
+      requests.push({url: String(url), ...init});
+      if (requests.length === 1) return response('<a href="/sap/bc/osd/edit">Open source</a>');
+      return response(form(init.body ? new URLSearchParams(init.body).get("src") : original,
+        init.body ? '<p class="ok">checked, and the system still compiles.</p>' : ""));
+    }});
+    let screen = await session.start();
+    screen = await click(session, screen, "Open source");
+    assert.equal(screen.editor, undefined);
+    screen = await click(session, screen, "Check");
+    assert.match(screen.status, /Open the native editor/); assert.equal(requests.length, 2);
+    screen = await session.step({command: "EDITOR_VIEW"});
+    assert.equal(screen.editor.value, original);
+    const oldId = screen.editor.id;
+    screen = await session.step({command: screen.elements.find(e => e.caption === "Check").command,
+      textEdit: {id: oldId, value: changed}});
+    assert.equal(new URLSearchParams(requests[2].body).get("src"), changed);
+    assert.equal(new URLSearchParams(requests[2].body).get("do"), "check");
+    assert.equal(screen.editor.value, changed);
+    screen = await session.step({command: "BACK"});
+    assert.match(screen.status, /unsaved changes/); assert.equal(requests.length, 3);
+    screen = await session.step({command: "KEEP_EDITING"}); assert.equal(screen.editor.value, changed);
+    screen = await session.step({textEdit: {id: oldId, value: "stale"}, key: 8});
+    assert.match(screen.status, /older screen/); assert.equal(requests.length, 3);
+    await session.step({command: "BACK"});
+    screen = await session.step({command: "DISCARD_EDITS"});
+    assert.equal(requests.length, 3); assert.equal(screen.editor, undefined); // Back never replays the POST.
+  });
+  it("never enables native submission for mixed or multiple textarea forms", () => {
+    for (const extra of ['<input name="other">', '<textarea name="second">b</textarea>']) {
+      const page = parseWebgui(`<form><textarea name="src">a</textarea>${extra}<button>Save</button></form>`, base);
+      assert.equal(page.editor, undefined); assert.equal(page.forms[0].unsupported, true);
+    }
+  });
+  it("keeps coloured source tokens together with indentation in display mode", () => {
+    const page = parseWebgui('<pre class="src"><span class="ln">1</span>  <span class="kw">WRITE</span> &apos;x&apos;.\n<span class="ln">2</span>\n</pre>', base);
+    assert.equal(page.rows[0].text, "   1    WRITE 'x'.");
+    assert.equal(page.rows[1].text, "   2  ");
+  });
+  it("preserves leading source blank lines after the editor's HTML sentinel newline", () => {
+    const source = "\n\nREPORT zexample.\n";
+    const page = parseWebgui(`<form><textarea name="src">\n${source}</textarea><button>Save</button></form>`, base);
+    assert.equal(page.editor.control.value, source);
+  });
   it("submits hidden state, changed fields, duplicate names and the clicked formaction", async () => {
     const requests = [];
     const session = new WebguiSession({backend: base, fetchImpl: async (url, init) => {
@@ -104,7 +180,7 @@ describe("interactive DIAG transactions", () => {
       const command = value => encodeNIFrame(encodeDiagMessage({}, [{type: 0x10, id: 12, sid: 4, value: Buffer.from(value)}]));
       socket.write(Buffer.concat([encodeNIFrame(hello), command("SE16"), command("/I")]));
       await new Promise((resolve, reject) => { socket.once("end", resolve); socket.once("error", reject); });
-      assert.deepEqual(events, ["start", "SE16", "/I"]); assert.equal(frames.length, 3); assert.equal(frames[2][1], 0x0a);
+      assert.deepEqual(events, ["start", "SE16"]); assert.equal(frames.length, 3); assert.equal(frames[2][1], 0x0a);
     } finally { socket.destroy(); await new Promise(resolve => server.close(resolve)); }
   });
 });

@@ -12,6 +12,9 @@ import {encodeNIFrame, NIFrameDecoder, NI_PONG, niControl} from "./ni.mjs";
 import {decompressSAP} from "./sap-compress.mjs";
 import {buildDynproScreen, readDynproInput} from "./diag-dynpro.mjs";
 import {WebguiSession} from "./diag-webgui.mjs";
+import {CfwTreeSession} from "./diag-tree.mjs";
+import {CfwEditorSession} from "./diag-editor.mjs";
+import {cfwContainerItems, readCfwTreeEvent} from "./diag-cfw.mjs";
 
 const DEFAULT_DIAG_MAX_PAYLOAD = 1024 * 1024;
 const DEFAULT_IDLE_TIMEOUT_MS = 30_000;
@@ -145,9 +148,63 @@ export function createDiagServer({backend = "http://127.0.0.1:3030", sid = ident
     const decoder = new NIFrameDecoder({maxPayloadLength});
     const abort = new AbortController();
     const session = sessionFactory({backend, signal: abort.signal});
+    const tree = new CfwTreeSession(), editor = new CfwEditorSession();
+    let pending, lastScreen, pendingCounter, controlTimer;
     let first = true, counter = 0, queued = 0, ending = false;
     let queue = Promise.resolve();
     const fail = error => { logger("protocol-error", peer, error); socket.destroy(); };
+    const write = response => {
+      if (!socket.write(encodeNIFrame(response))) {
+        socket.pause(); socket.once("drain", () => socket.resume());
+      }
+    };
+    const emitControl = value => {
+      const count = Buffer.alloc(4); count.writeUInt32BE(counter++ >>> 0); pendingCounter = count;
+      write(encodeDiagMessage({msgInfo: 1}, [{type: 16, id: 4, sid: 38, value: count},
+        {type: 16, id: 8, sid: 0, value}, {type: DIAG_ITEM.EOM}]));
+      clearTimeout(controlTimer);
+      controlTimer = setTimeout(() => fail(new Error("SAP GUI control response timed out")), 30000);
+      controlTimer.unref();
+    };
+    const emitScreen = (screen, initial = false) => {
+      let response = buildDynproScreen(screen, {sid, initial, counter: counter++});
+      if (screen.tree || screen.editor) {
+        const items = parseDiagItems(response.subarray(8)).filter(i => i.type !== DIAG_ITEM.EOM);
+        const binding = screen.editor ? {name: "OSD_EDIT", row: 4, height: 21} : {};
+        response = encodeDiagMessage({msgInfo: 1}, [...items, ...cfwContainerItems(binding), {type: DIAG_ITEM.EOM}]);
+      }
+      lastScreen = screen; write(response);
+    };
+    const controlFailure = (operation, error) => {
+      logger("control-error", peer, error); pending = undefined;
+      if (operation.kind === "read") {
+        // Preserve the live buffer, selection and actions for a retry. Never
+        // submit the previous source or reload over edits after a read failure.
+        editor.cancel();
+        emitScreen({...operation.screen, status: `Source was not submitted: ${error.message}`});
+      } else {
+        operation.driver.fail();
+        if (operation.driver === tree) session.nativeTree = false;
+        else session.nativeEditor = false;
+        emitScreen(session.render(operation.driver === tree ?
+          "Native tree unavailable in this client. List view is still available." :
+          `Native editor unavailable; nothing was submitted. ${error.message}`));
+      }
+    };
+    const show = (screen, initial = false) => {
+      if (socket.destroyed || ending) return;
+      if (screen.exit) { ending = true; socket.end(sessionEnd); return; }
+      const driver = screen.editor ? editor : screen.tree ? tree : undefined;
+      if (driver) {
+        const operation = {kind: "load", driver, screen, initial};
+        try {
+          if (driver.disabled) throw new Error("This client could not initialize the native control. Use WebGUI.");
+          const value = driver.prepare(screen.editor ?? screen.tree);
+          if (value) { pending = operation; emitControl(value); return; }
+        } catch (error) { controlFailure(operation, error); return; }
+      }
+      emitScreen(screen, initial);
+    };
     socket.setTimeout(idleTimeoutMs, () => { ending = true; abort.abort(); socket.end(sessionEnd); });
     socket.on("data", chunk => {
       try {
@@ -161,22 +218,45 @@ export function createDiagServer({backend = "http://127.0.0.1:3030", sid = ident
           const message = parseClientMessage(payload, first); first = false;
           queue = queue.then(async () => {
             if (socket.destroyed || ending) return;
-            const screen = initial ? await session.start() : await session.step(readDynproInput(message.items));
-            if (socket.destroyed || ending) return;
-            if (screen.exit || (!initial && (message.header[1] & 0x08))) {
+            if (!initial && ((message.header[1] & 0x08) || isExit(message.items))) {
               ending = true; socket.end(sessionEnd); return;
             }
-            const response = encodeNIFrame(buildDynproScreen(screen, {sid, initial, counter: counter++}));
-            if (!socket.write(response)) {
-              socket.pause(); socket.once("drain", () => socket.resume());
+            const controlReply = message.items.find(i => i.id === 8 && [1, 2].includes(i.sid));
+            if (controlReply) {
+              if (!pending) throw new Error("Unsolicited Control Framework reply");
+              clearTimeout(controlTimer);
+              const operation = pending;
+              try {
+                const echo = message.items.find(i => i.id === 4 && i.sid === 38)?.value;
+                if (!echo?.equals(pendingCounter)) throw new Error("Control Framework reply has a stale counter");
+                if (controlReply.sid === 2) throw new Error("SAP GUI cannot create this control");
+                const next = operation.driver.accept(controlReply.value);
+                if (next) { emitControl(next); return; }
+              } catch (error) { controlFailure(operation, error); return; }
+              pending = undefined;
+              if (operation.kind === "read") {
+                const textEdit = {id: operation.screen.editor.id, value: editor.source};
+                show(await session.step({...operation.input, textEdit}));
+              } else emitScreen(operation.screen, operation.initial);
+              return;
             }
+            if (pending) throw new Error("Expected Control Framework reply before another action");
+            const input = readDynproInput(message.items);
+            input.treeEvent = readCfwTreeEvent(message.items);
+            if (!initial && lastScreen?.editor) {
+              const operation = {kind: "read", driver: editor, screen: lastScreen, input};
+              try { pending = operation; emitControl(editor.read()); }
+              catch (error) { controlFailure(operation, error); }
+              return;
+            }
+            show(initial ? await session.start() : await session.step(input), initial);
           }).catch(fail).finally(() => { queued--; });
         }
       } catch (error) { fail(error); }
     });
     socket.on("end", () => { try { decoder.finish(); } catch (error) { logger("protocol-error", peer, error); } });
     socket.on("error", error => logger("socket-error", peer, error));
-    socket.on("close", () => { ending = true; abort.abort(); logger("close", peer); });
+    socket.on("close", () => { ending = true; clearTimeout(controlTimer); abort.abort(); logger("close", peer); });
   });
   server.maxConnections = maxConnections;
   return server;

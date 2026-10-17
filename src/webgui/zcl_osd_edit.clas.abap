@@ -55,6 +55,7 @@ CLASS zcl_osd_edit DEFINITION PUBLIC CREATE PUBLIC.
              count    TYPE string,
              ms       TYPE string,
              error    TYPE string,
+             json     TYPE string,
              objects  TYPE tt_object,
              issues   TYPE tt_issue,
              types    TYPE tt_type,
@@ -70,8 +71,13 @@ CLASS zcl_osd_edit DEFINITION PUBLIC CREATE PUBLIC.
         iv_source        TYPE string OPTIONAL
         iv_filter        TYPE string OPTIONAL
         iv_limit         TYPE string OPTIONAL
+        iv_json          TYPE string OPTIONAL
       RETURNING
         VALUE(rs_answer) TYPE ty_answer.
+
+    CLASS-METHODS publication
+      IMPORTING iv_json TYPE string iv_type TYPE string iv_name TYPE string
+      RETURNING VALUE(rv_html) TYPE string.
 
 *   which of the store's commands this host can do, as a blank-separated
 *   list of their names: the buttons are drawn from it, so a host that
@@ -169,6 +175,7 @@ CLASS zcl_osd_edit IMPLEMENTATION.
                     iv_source   = iv_source
                     iv_filter   = iv_filter
                     iv_limit    = iv_limit
+                    iv_json     = iv_json
           IMPORTING ev_source   = rs_answer-source
                     ev_file     = rs_answer-file
                     ev_package  = rs_answer-package
@@ -180,6 +187,7 @@ CLASS zcl_osd_edit IMPLEMENTATION.
                     ev_count    = rs_answer-count
                     ev_ms       = rs_answer-ms
                     ev_error    = rs_answer-error
+                    ev_json     = rs_answer-json
           TABLES    et_object   = rs_answer-objects
                     et_issue    = rs_answer-issues
                     et_type     = rs_answer-types
@@ -246,6 +254,10 @@ CLASS zcl_osd_edit IMPLEMENTATION.
     DATA ls_answer TYPE ty_answer.
     DATA lt_fields TYPE tihttpnvp.
     DATA lv_change TYPE abap_bool.
+    DATA lv_op TYPE string.
+    DATA ls_metadata TYPE ty_answer.
+    DATA ls_status TYPE ty_answer.
+    DATA lo_request TYPE REF TO zcl_osd_adt_json.
 
 *   read through zcl_osd_form, not through `get_form_field`: the shim fills
 *   the form fields from the query string only, so the body of the POST this
@@ -258,6 +270,7 @@ CLASS zcl_osd_edit IMPLEMENTATION.
     lv_filter = zcl_osd_form=>value( it_fields = lt_fields iv_name = `q` ).
     lv_source = zcl_osd_form=>value( it_fields = lt_fields iv_name = `src` ).
     lv_do = zcl_osd_form=>value( it_fields = lt_fields iv_name = `do` ).
+    lv_op = zcl_osd_form=>value( it_fields = lt_fields iv_name = `op` ).
     IF zcl_osd_form=>value( it_fields = lt_fields iv_name = `change` ) IS NOT INITIAL.
       lv_change = abap_true.
     ENDIF.
@@ -309,6 +322,22 @@ CLASS zcl_osd_edit IMPLEMENTATION.
                              iv_name    = lv_name ).
           lv_source = ls_answer-source.
       ENDCASE.
+*     CHECK and ACTIVATE return verdicts, not source metadata. Do not label
+*     their empty writable/file fields as a read-only object.
+      IF lv_do IS NOT INITIAL AND ls_answer-file IS INITIAL.
+        ls_metadata = store( iv_command = `READ` iv_type = lv_type iv_name = lv_name ).
+        ls_answer-file = ls_metadata-file.
+        ls_answer-writable = ls_metadata-writable.
+      ENDIF.
+      IF lv_do IS INITIAL AND lv_op IS NOT INITIAL.
+        CREATE OBJECT lo_request.
+        lo_request->add( iv_name = `op_id` iv_value = lv_op ).
+        ls_status = store( iv_command = `ACTIVATION_STATUS` iv_json = lo_request->document( ) ).
+        ls_answer-json = ls_status-json.
+        IF ls_status-error IS NOT INITIAL.
+          ls_answer-error = ls_status-error.
+        ENDIF.
+      ENDIF.
 *     the tokens for the coloured display, and only when it is shown: a
 *     text area does not need them. Scanned here, in ABAP, rather than asked
 *     of the host, so the display is the same wherever this runs
@@ -391,6 +420,7 @@ CLASS zcl_osd_edit IMPLEMENTATION.
     DATA lv_caps    TYPE string.
     DATA lv_buttons TYPE string.
     DATA lv_hint    TYPE string.
+    DATA lv_result TYPE string.
 
     IF is_answer-error IS NOT INITIAL.
       lv_head = |<div class="err"><b>The store refused.</b><div class="msg">{ esc( is_answer-error ) }</div></div>|.
@@ -436,21 +466,79 @@ CLASS zcl_osd_edit IMPLEMENTATION.
         |<input type="hidden" name="type" value="{ esc( iv_type ) }">| &&
         |<input type="hidden" name="name" value="{ esc( iv_name ) }">| &&
         |<input type="hidden" name="change" value="x">| &&
-        |<textarea name="src" rows="28" spellcheck="false">{ esc( iv_source ) }</textarea>| &&
+*       HTML drops one LF immediately after the textarea start tag. Supply
+*       that LF ourselves so a source beginning with blank lines is intact.
+        |<textarea name="src" rows="28" spellcheck="false">{ cl_abap_char_utilities=>newline }{ esc( iv_source ) }</textarea>| &&
         `<div class="bar">` && lv_buttons &&
         |<span class="dim">{ esc( lv_hint ) }</span>| &&
         `</div></form>`.
     ENDIF.
 
+    IF is_answer-error IS INITIAL.
+      lv_result = publication( iv_json = is_answer-json iv_type = iv_type iv_name = iv_name ).
+      IF lv_result IS INITIAL.
+        lv_result = issue_table( it_issue = is_answer-issues iv_active = is_answer-active
+                                iv_ms = is_answer-ms iv_did = iv_did iv_note = is_answer-note ).
+      ENDIF.
+    ENDIF.
     rv_html = lv_head &&
       |<p class="note"><a href="?">objects</a> &middot; <code>{ esc( is_answer-file ) }</code>| &&
       |{ lv_state }</p>| &&
       lv_box &&
-      issue_table( it_issue  = is_answer-issues
-                   iv_active = is_answer-active
-                   iv_ms     = is_answer-ms
-                   iv_did    = iv_did
-                   iv_note   = is_answer-note ).
+      lv_result.
+  ENDMETHOD.
+
+  METHOD publication.
+    DATA lo_json TYPE REF TO zcl_ajson.
+    DATA lv_state TYPE string.
+    DATA lv_op TYPE string.
+    DATA lv_message TYPE string.
+    DATA lv_class TYPE string.
+    DATA lt_members TYPE string_table.
+    DATA lv_member TYPE string.
+    IF iv_json IS INITIAL.
+      RETURN.
+    ENDIF.
+    TRY.
+        lo_json = zcl_ajson=>parse( iv_json ).
+        lv_state = lo_json->get_string( `/state` ).
+        IF lv_state IS INITIAL.
+          RETURN.
+        ENDIF.
+        lv_op = lo_json->get_string( `/op_id` ).
+        lv_class = `bad`.
+        IF lv_state = `not_found`.
+          lv_message = `Activation status is no longer available. Check the program before repeating activation.`.
+        ELSEIF lo_json->get_string( `/type` ) <> iv_type OR lo_json->get_string( `/name` ) <> iv_name.
+          lv_message = `This activation belongs to another object.`.
+        ELSEIF lv_state = `pending`.
+          lv_class = `note`.
+          lv_message = `Activation pending. Source is saved; publication has not finished. Refresh activation status.`.
+        ELSEIF lv_state = `published`.
+          lv_class = `ok`.
+          lv_message = `Activation published. ` && lo_json->get_string( `/generation_id` ).
+          IF lo_json->get_boolean( `/live` ) = abap_false.
+            lv_message = lv_message && ` The serving runtime has not loaded this generation.`.
+          ENDIF.
+        ELSE.
+          lv_message = `Activation failed. ` && lo_json->get_string( `/note` ).
+        ENDIF.
+        rv_html = |<p id="msg" class="{ lv_class }">{ esc( lv_message ) }</p>|.
+        lt_members = zcl_osd_adt_json=>ordered_members( io_json = lo_json iv_path = `/issues` ).
+        LOOP AT lt_members INTO lv_member.
+          lv_message = lo_json->get_string( `/issues/` && lv_member && `/message` ).
+          IF lv_message IS INITIAL.
+            lv_message = lo_json->get_string( `/issues/` && lv_member && `/MESSAGE` ).
+          ENDIF.
+          rv_html = rv_html && |<p class="bad">{ esc( lv_message ) }</p>|.
+        ENDLOOP.
+        IF lv_state = `pending`.
+          rv_html = rv_html && |<a class="btn" href="?type={ esc( iv_type ) }&amp;name={ esc( iv_name ) }| &&
+            |&amp;change=x&amp;op={ esc( lv_op ) }">Refresh activation status</a>|.
+        ENDIF.
+      CATCH cx_root.
+        rv_html = `<p class="bad">Activation result could not be read. Check the program before repeating activation.</p>`.
+    ENDTRY.
   ENDMETHOD.
 
   METHOD coloured.

@@ -2,6 +2,16 @@
   "note": "Совпадения, на которые посмотрели и решили, что это не утечка. Каждому нужна причина: иначе список превращается в способ погасить проверку.",
   "allow": [
     {
+      "file": "tools/protocols/diag-editor.mjs",
+      "value": "83658045-6571-3232-7082-797884697868",
+      "reason": "Fixed SAPGUI.APPLICATION COM class ID, not a session or system identifier. Published in SAP Community frontend traces: https://community.sap.com/t5/application-development-and-automation-discussions/runtime-error-message-type-x-in-va01-tcode/td-p/10414725"
+    },
+    {
+      "file": "tools/protocols/diag-tree.mjs",
+      "value": "83658045-6571-3232-7082-797884697868",
+      "reason": "The same fixed SAPGUI.APPLICATION COM class ID used to instantiate the frontend control manager; public reference: https://community.sap.com/t5/application-development-and-automation-discussions/runtime-error-message-type-x-in-va01-tcode/td-p/10414725"
+    },
+    {
       "file": "src/l2demo/zcl_l3_fleet2.clas.trace.meta.json",
       "value": "172.30.209.132",
       "reason": "Packed byte coincidence ac1ed184 in SHA-256 85b9e48413de0e8970035e64ac1ed184ed84fafe5bae45634f7360f76e784844, independently recomputed from recipes/l3-cockpit/runner.patch.json. This is a template digest, not a system address."

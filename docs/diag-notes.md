@@ -31,9 +31,10 @@ This is a **private development listener with a demo identity**, not SAP
 authentication or an SAP dispatcher replacement. Keep it on a trusted
 interface or authenticated tunnel. It exposes the transactions that the
 runtime can already execute. It does not add a general dynpro processor,
-arbitrary report execution, ALV/CFW/browser controls, selection lists, rich
-editors, multi-window `/o`, or Unicode codepage negotiation. Editable text is
-currently ASCII, with 64 characters per field; display text is transliterated.
+arbitrary report execution, general ALV/CFW/browser controls, selection lists,
+multi-window `/o`, or Unicode codepage negotiation. Editable text is currently
+ASCII, with 64 characters per plain field; display text is transliterated. The
+opt-in native source editor described below has a separate 128 KiB limit.
 Native edit buffers use a 24-bit text length, including padded buffers larger
 than 255 bytes; content is bounded by the declared character capacity and
 the first NUL, ignoring unused native buffer bytes. Each
@@ -43,6 +44,120 @@ unknown outcome, so check state before repeating a mutating action.
 
 Regression coverage is in `test/protocol-diag-transactions.mjs`; the historical
 wire research and original tape fixture are documented below.
+
+### Native menu tree (development)
+
+The menu's **Tree view** action creates a native SAP GUI tree from the backend's
+existing HTML folder/leaf hierarchy. **List view** keeps the plain dynpro path
+available to clients without a Control Framework implementation. A double-click
+uses the leaf's existing URL, with the same origin/path restrictions as other
+actions. Back restores the previous tree and its frontend selection/expansion.
+This path does not add transactions that the backend cannot execute.
+
+`diag-cfw.mjs` encodes fixed-width VARS/PARAMS/VERBS through the existing RFC
+field-chain codec. `diag-tree.mjs` owns each connection's returned frontend
+handles, creates the container, fills nodes in bounded batches and restores
+initial expansion after children exist. Requests use inline table rows; replies
+reuse the SAP decompressor already present here. No capture replay or SAP source
+is part of this implementation. A failed control setup falls back to List view;
+a missing reply times out rather than leaving the connection busy indefinitely.
+
+Native SAP GUI 7.40 has rendered the live backend menu and opened a transaction
+by double-click, with Back and List view working. The implementation is still a
+development change: release validation/deployment and headless tree support are
+pending. The headless client's existing plain dynpro path remains available.
+Regression coverage is registered in `test/protocol-diag-cfw.mjs`; no general
+editor, ALV or original SE38/SE80 support is implied by this tree transport.
+
+### Native source editor (development)
+
+An editor form with one textarea and hidden metadata offers **Native editor**.
+It creates `SAPGUI.TextEditCtrl.1` through the same per-connection CFW transport.
+The backend's submit buttons stay available above the editor; **Messages** shows
+the complete form and diagnostics, and returning to the editor retains its
+buffer and caret. Mixed or multiple textarea forms still require the browser.
+Plain clients need not request a native control to browse other transactions.
+
+Before an action leaves the editor, the listener reads its complete native
+buffer. Source has its own page identity and never passes through the 64-character
+dynpro field limit. A read failure submits nothing and keeps the live editor
+visible. Back, Home and transaction navigation prompt before discarding dirty
+source. Check preserves the dirty baseline; only an explicit successful Save
+or Activate response from the editor endpoint establishes a new saved baseline.
+Editor POST results replace the current view rather than adding another copy of
+unsaved source to Back history. Closing the frontend ends its session.
+
+Short RFC strings trim trailing spaces. Loading uses bounded ASCII chunks with
+a temporary final marker, removed through the control's selection API. The
+`Text` getter returns CR-terminated logical lines, including a final terminator;
+unlike `TextStream`, this protects trailing spaces on the last line. Long result
+slots use `_SRESULT` with a one-based index into `SVARS`. The decoder preserves
+whitespace and character references, and a complete readback must equal the
+source before the editor is considered loaded. Input is limited to ASCII and
+128 KiB so XML escaping still fits the bounded NI reply. Unsupported characters
+are rejected rather than transliterated into source.
+
+Native SAP GUI 7.40 has loaded a live 93-line repository program through this
+path, retained an edited buffer across Messages/Native editor, and prompted on
+Back with unsaved changes. Isolated release acceptance also created a program,
+rejected an undefined variable without writing it, checked corrected source and
+saved that source through the native control. ADT read back the exact source.
+Headless CFW support and final deployment remain pending. Regression cases are in
+the existing DIAG transaction and CFW suites. The release preflight now passes
+those suites together with the workbench/editor integration checks.
+
+### Workbench entry points (development)
+
+`SE38` now declares the clean-room `ZCL_OSD_WORKBENCH` transaction and `SE80`
+declares its Object Navigator entry, `ZCL_OSD_SE80`. Their selector forms post to
+`/sap/bc/osd/workbench/`. Display and Change use the existing ABAP editor; Create
+uses ADT's typed STORE helper, repository ownership checks and source lock.
+Package and object navigation comes from the same store used by ADT. It is
+rendered as a native tree when Tree view is selected, including when the initial
+transaction document is inside the HTML viewer's `srcdoc`.
+
+Execute requires an existing active program and resolves it through the generated
+`ZCL_OSD_BATCH_REPORT=>DIALOG_PROGRAM` mapping. Only strict converter output
+produces an executable transaction target. Partial/skeleton conversion, unknown
+programs and inactive changes are explicit refusals; no wrapper name is guessed
+from user input. The generated report wrapper then owns selection-screen and
+list processing through open-abap-gui. Creation and execution require POST.
+
+Full compilation and the release integration suites pass. An isolated Fly
+candidate also passed real headless MCP navigation: SE38 Display/Back, Execute
+with an entered report parameter, and SE80 package-to-source navigation.
+The candidate subsequently published a newly created report and a fresh headless
+DIAG client executed it with an entered parameter. Final image persistence and
+deployment acceptance remain pending.
+They do not import SAP's transaction source or claim the complete original
+Workbench, module-pool execution, debugger or every SE80 object operation.
+Release coverage is registered in `test/workbench.mjs`, alongside the existing
+report, editor and DIAG suites.
+
+The editor emits an extra initial textarea LF because an HTML parser removes
+one immediately after the opening tag. This preserves source that begins with
+blank lines. Source submissions have a separate bounded five-minute timeout for
+Check/Activate; ordinary navigation keeps its shorter timeout. A timed-out
+mutation still has an unknown outcome and must be checked before retrying.
+
+Report toolbars can place icon buttons outside the selection form. The DIAG
+parser resolves explicit `form` ownership in the same HTML document (including
+forward references) and uses accessible labels for icon-only buttons. This is
+required for open-abap-gui's Execute button; iframe IDs cannot bind to an outer
+document's form.
+
+The editor distinguishes validation from publication. A deferred activation
+shows **Activation pending** and offers **Refresh activation status** under
+Messages; the existing STORE activation journal supplies the eventual published
+or failed result. A store refusal no longer prints a successful activation
+verdict below its error. Check and activation retain the object's source path
+and writable metadata. Regression coverage includes failed publication and a
+ticket belonging to another object.
+
+Persistent source hosts record journal ownership using both the process start
+identity and the Linux boot identity. Reused PIDs after a container restart must
+not block activation or be mistaken for the journal's original process. Legacy
+numeric owners with an alive, unverifiable PID are conservatively refused.
 
 ### Upstream reuse audit (2026-10-17)
 
@@ -62,6 +177,46 @@ is a demo application using the same protocol research, not an ABAP backend.
 The needed seam is thus runtime HTML forms to DIAG dialog steps. The existing
 JavaScript protocol host owns that seam, without adding a second Go service
 or duplicating Lars's ABAP execution framework.
+
+### Native workbench and tree follow-up (2026-10-17)
+
+The workbench entries described above implement a clean-room subset of SE38
+and SE80, including repository navigation and report editing/execution. The ABAP editor,
+`ZCL_OSD_EDIT`, reaches the same `ObjectStore` used by ADT through
+`StoreDestination`; it already exposes source reads/writes, syntax checks
+and activation. Reuse that backend for any workbench implementation rather
+than adding a separate repository or compiler.
+
+Further upstream inspection found:
+
+| Project / inspected revision | Reusable part | Boundary |
+| --- | --- | --- |
+| [open-abap-gui](https://github.com/open-abap/open-abap-gui/tree/50186bd2041836283447764af3d5c653785439f3) | Report converter, host PBO/PAI, tree models, text editor, containers | Controls render through HTML; no native DIAG server transport. |
+| [larshp/gg-gui](https://github.com/larshp/gg-gui/tree/f26234d13175684517205f2de956053bebbfd806) | MIT reference reports, including `ZGG_GUI_COMPOSITE` with navigation tree, toolbar, grid, editor and splitters | Examples and a browser host, not SAP's Workbench implementation. Useful as portable acceptance programs. |
+| [open-diag-go](https://github.com/oisee/open-diag-go/tree/62029ee085bca840ba48778dad51c893e98d0ebc) | NI/DIAG codecs; `pkg/cfw` models automation verbs, parameter descriptors, value records and frontend handles | CFW is principally a client decoder/response model. `cmd/server` remains a demo; no general server-side tree/editor execution. |
+
+The GUI pin is the oisee fork at `b65c4431d71c7b23468d08bd955b18785fd2ca6c`.
+GitHub's comparison with the inspected upstream head reports divergence:
+33 upstream commits and five fork commits. Both simple-tree and base-tree
+source blobs differ. An upstream update needs a review of the fork changes
+and converter/host compatibility; changing the pin alone is not a DIAG fix.
+
+The native tree requires another transport layer after the plain dynpro:
+Control Framework `RFC_TR` requests, per-session frontend handles, data
+provider transfers, and tree event routing. An existing authorized reference
+trace already contains an Easy Access initialization with 152 automation
+verbs. It includes container creation/binding, tree table setup,
+`ABAPExpandNodes`, cached selection properties, and native double-click /
+expand event registration. This is enough to begin that transport work
+without starting another SAP system. Raw captures and identifiers stay
+outside tracked files; a trace-shaped reply must not become the server's
+execution model.
+
+Original SAP transaction source alone would not supply its dependent
+repository, function groups, dynpros, GUI statuses, DDIC and kernel services.
+The clean-room boundary in `CLAUDE.md` still applies. A functional workbench
+using this runtime and executing SAP's original Workbench are different
+deliverables; neither is proven by the current form bridge.
 
 ## Historical dispatcher-side survey
 

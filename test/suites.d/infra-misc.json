@@ -1,5 +1,6 @@
 {
   "files": [
+    "test/activation-owner.mjs",
     "test/anormalies-ids.mjs",
     "test/abap-types.mjs",
     "test/narrow-submit.mjs",
@@ -11,6 +12,8 @@
     "test/transpiler-pin.mjs",
     "test/e2e-instance.mjs",
     "test/gui-reports.mjs",
+    "test/workbench.mjs",
+    "test/image-workspace.mjs",
     "test/journal.mjs",
     "test/leak-scan.mjs",
     "test/pre-push.mjs",
@@ -21,6 +24,7 @@
     "test/unit-risk.mjs",
     "test/protocol-diag.mjs",
     "test/protocol-diag-transactions.mjs",
+    "test/protocol-diag-cfw.mjs",
     "test/protocol-ni.mjs",
     "test/protocol-rfc.mjs",
     "test/osd-bind.mjs",

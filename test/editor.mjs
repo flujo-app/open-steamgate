@@ -1,6 +1,8 @@
 import {expect} from "chai";
 import {readFileSync} from "node:fs";
 import {startServer} from "./start.mjs";
+import {parseWebgui} from "../tools/protocols/diag-webgui.mjs";
+import {fill} from "../tools/osd-destination.mjs";
 
 // The editor screen (backlog G.8, /sap/bc/osd/edit/): pick an object, change
 // its source, check it, activate it -- in a browser, with no JavaScript.
@@ -66,11 +68,12 @@ describe("the editor", function () {
   it("checks the source it was POSTED, which is the form-body gap this screen found", async () => {
     // the whole round trip: a body of 20-odd kilobytes reaches the screen,
     // the screen reaches the store, the store parses the system and answers
-    const source = readFileSync(FILE, "utf8");
-    const page = await (await post({type: "CLAS", name: OBJECT, do: "check", src: source})).text();
+    const source = "\n\n" + readFileSync(FILE, "utf8");
+    const page = await (await post({type: "CLAS", name: OBJECT, do: "check", change: "x", src: source})).text();
     expect(page, "the screen did not fall back to its object list, which is what an empty name does")
       .to.not.match(/\d+ shown of \d+ objects/);
     expect(page, "it holds").to.contain("the system still compiles");
+    expect(parseWebgui(page, BASE).editor.control.value, "leading blank lines survive the HTML parser").to.equal(source);
   });
 
   it("names the line of a source that does not compile, and writes nothing", async () => {
@@ -82,6 +85,41 @@ describe("the editor", function () {
     expect(page, "and the object it belongs to, because an activation is refused by a caller as often as by the object")
       .to.contain(OBJECT);
     expect(readFileSync(FILE, "utf8"), "a check does not write").to.equal(before);
+    expect(page, "a verdict must retain source metadata").to.contain(FILE);
+    expect(page).not.to.contain('class="dim">read only');
+  });
+
+  it("reports deferred activation as pending and reads its final publication result", async function () {
+    const destinations = globalThis.abap?.context?.RFCDestinations;
+    if (!destinations?.STORE) this.skip();
+    const real = destinations.STORE;
+    const ticket = {op_id: "workbench-publication", type: "CLAS", name: OBJECT, state: "pending", live: false};
+    destinations.STORE = {call: async (name, signature) => {
+      const command = signature.exporting.iv_command.get();
+      if (["ACTIVATE", "ACTIVATION_STATUS"].includes(command)) {
+        if (command === "ACTIVATION_STATUS") expect(JSON.parse(signature.exporting.iv_json.get()).op_id).to.equal(ticket.op_id);
+        fill(signature, {EV_JSON: JSON.stringify(ticket), EV_ACTIVE: "X", EV_NOTE: "live after the step"});
+      } else await real.call(name, signature);
+    }};
+    try {
+      const response = await post({type: "CLAS", name: OBJECT, do: "activate", change: "x", src: readFileSync(FILE, "utf8")});
+      const pending = await response.text();
+      expect(pending).to.contain("Activation pending.");
+      expect(pending).not.to.contain("activated, and the system still compiles");
+      const parsed = parseWebgui(pending, BASE);
+      const refresh = parsed.rows.find(row => row.caption === "Refresh activation status");
+      expect(refresh).not.to.equal(undefined);
+      const url = new URL(refresh.action.href, BASE);
+      ticket.state = "failed"; ticket.note = "Build rejected"; ticket.issues = [{message: "missing <source>"}];
+      const failed = await (await fetch(url)).text();
+      expect(failed).to.contain("Activation failed. Build rejected");
+      expect(failed).to.contain("missing &lt;source&gt;");
+      expect(failed).not.to.contain("Activation published");
+      ticket.state = "published"; ticket.live = true; ticket.generation_id = "1234567890abcdef"; ticket.issues = [];
+      expect(await (await fetch(url)).text()).to.contain("Activation published. 1234567890abcdef");
+      ticket.name = "ZOTHER_OBJECT";
+      expect(await (await fetch(url)).text()).to.contain("This activation belongs to another object");
+    } finally { destinations.STORE = real; }
   });
 
   it("keeps what the person typed after a save, rather than reading the file back", async () => {
