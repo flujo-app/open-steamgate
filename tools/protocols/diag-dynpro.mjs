@@ -54,10 +54,12 @@ export function readDynproInput(items) {
         const minimum = type === 0x80 ? 23 : 19;
         if (len < minimum) throw new Error("short dynpro field");
         // Native SAP GUI sends a 24-bit text length (often padded to 2048).
+        // Only bytes before the first NUL belong to the field. SAP GUI 7.40
+        // can leave unrelated buffer contents after that terminator.
         const length = type === 0x80 ? 0 : data.readUIntBE(13, 3);
         if (19 + length > len && type !== 0x80) throw new Error("dynpro field text overruns atom");
         fields.push({row: data.readUInt16BE(8), col: data.readUInt16BE(10),
-          value: type === 0x80 ? data[13] === 0x58 : data.subarray(19, 19 + length).toString("latin1").replace(/[\0 ]+$/, "")});
+          value: type === 0x80 ? data[13] === 0x58 : data.subarray(19, 19 + length).toString("latin1").split("\0", 1)[0].trimEnd()});
       }
       off += len;
     }
